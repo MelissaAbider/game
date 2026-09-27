@@ -41,14 +41,15 @@ listening card, word-by-word transcription, and volume meter as a real microphon
 
 1. [The Game](#1-the-game)
 2. [How It Works](#2-how-it-works)
-3. [AI Services](#3-ai-services)
-4. [Project Structure](#4-project-structure)
-5. [Setup and Launch](#5-setup-and-launch)
-6. [Controls](#6-controls)
-7. [Generate Images](#7-generate-images)
-8. [Tests](#8-tests)
-9. [Configuration](#9-configuration)
-10. [Troubleshooting](#10-troubleshooting)
+3. [AI Engineering Highlights](#3-ai-engineering-highlights)
+4. [AI Services](#4-ai-services)
+5. [Project Structure](#5-project-structure)
+6. [Setup and Launch](#6-setup-and-launch)
+7. [Controls](#7-controls)
+8. [Generate Images](#8-generate-images)
+9. [Tests](#9-tests)
+10. [Configuration](#10-configuration)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -115,7 +116,92 @@ Important points:
 
 ---
 
-## 3. AI Services
+## 3. AI Engineering Highlights
+
+EchoShift Lab is built as an **AI engineering system**, not as a model-training demo. The core challenge is connecting
+real-time voice input, LLM reasoning, structured outputs, validation, and game execution without letting the model take
+unsafe or impossible actions.
+
+### Real-time voice-to-action pipeline
+
+The player speaks naturally. Unity streams audio to the backend, Gradium converts speech to text, and the transcript is
+either parsed locally for simple commands or sent to Gemini for complex intent parsing.
+
+```text
+voice audio
+  -> Gradium STT
+  -> transcript
+  -> QuickIntent or Gemini
+  -> structured JSON actions
+  -> backend validation
+  -> Unity CommandExecutor
+  -> gameplay result
+```
+
+This keeps the player experience responsive while still supporting flexible natural language.
+
+### Structured LLM output
+
+Gemini does not return free-form text for gameplay. It must produce JSON matching the backend schema:
+
+- `IntentResponse`: confidence, clarification flag, optional ECHO reply, and action list.
+- `GameAction`: action type, target, speed, distance, duration, build kind, and material.
+- `ActionType`: a closed set of allowed actions such as `MOVE_TO`, `JUMP_OVER`, `INTERACT`, `BUILD`, `ECHO`, and `STOP`.
+
+That makes the LLM output machine-readable, testable, and safe to validate before it reaches the Unity runtime.
+
+### Guardrails and game authority
+
+The LLM proposes intent; it never directly controls the character. The backend validates every action against the current
+world state:
+
+- unknown or invisible targets are rejected;
+- unsupported action types are ignored;
+- vague autopilot requests such as "solve the level" require clarification;
+- low-confidence or empty outputs do not execute;
+- emergency commands like `stop`, `wait`, or `cancel` bypass the model and immediately produce a `STOP` action.
+
+Unity remains the source of truth for physics, collisions, hazards, room rules, and whether an action can actually happen.
+
+### Latency strategy
+
+Everyday commands are parsed on-device in Unity by `QuickIntent.cs`, so they do not wait for a network round trip:
+
+- `walk forward`
+- `jump`
+- `crouch`
+- `turn around`
+- `shout`
+
+Only object-aware or multi-step commands go to Gemini, for example `go to the terminal and activate it` or
+`build a bridge of ice over the gap`.
+
+### Robust fallback behavior
+
+If Gemini is unavailable, the backend falls back to a deterministic rule-based parser. The game can still understand basic
+movement, hazards, terminal interaction, and stop commands. This makes the system testable in CI and playable without a
+full AI setup.
+
+### Multimodal AI use
+
+The project also uses Gemini image generation for game art: room backgrounds, robot poses, props, materials, and textures.
+Generated images are cached and copied into Unity resources so the runtime does not depend on image generation latency.
+
+### What this demonstrates
+
+From an AI/ML engineering perspective, the project demonstrates:
+
+- speech-to-text integration in a real-time interactive loop;
+- LLM-based intent parsing with strict structured output;
+- schema validation and guardrails around model predictions;
+- hybrid local/remote inference for latency control;
+- fallback logic when model calls fail;
+- multimodal asset generation with caching;
+- separation of API keys and model calls into a backend service.
+
+---
+
+## 4. AI Services
 
 All AI calls go through the **Python backend**. API keys are never stored inside the Unity client.
 
@@ -132,7 +218,7 @@ The rules given to Gemini are documented in [docs/MODEL_RULES.md](docs/MODEL_RUL
 
 ---
 
-## 4. Project Structure
+## 5. Project Structure
 
 ```text
 game/
@@ -188,7 +274,7 @@ The game is assembled by code. `Main.unity` contains a minimal scene, and `GameD
 
 ---
 
-## 5. Setup and Launch
+## 6. Setup and Launch
 
 ### Requirements
 
@@ -232,7 +318,7 @@ backend; launch the backend with `--host 0.0.0.0` for that flow.
 
 ---
 
-## 6. Controls
+## 7. Controls
 
 | Key | Action |
 |---|---|
@@ -249,7 +335,7 @@ Example commands: *walk forward*, *run*, *stop*, *jump over the laser*, *crouch 
 
 ---
 
-## 7. Generate Images
+## 8. Generate Images
 
 Game art is generated through the Gemini image API. Prompts live in `backend/ai/design_assets.py`:
 
@@ -270,7 +356,7 @@ Assets with a character or obstacle are generated on a green background and keye
 
 ---
 
-## 8. Tests
+## 9. Tests
 
 ```powershell
 python -m pytest backend/tests
@@ -298,7 +384,7 @@ EchoShift.exe -autotest -room C -voice -say "walk forward|BREAK THROUGH|~walk fo
 
 ---
 
-## 9. Configuration
+## 10. Configuration
 
 `backend/.env`:
 
@@ -321,7 +407,7 @@ Game launch options:
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Problem | Fix |
 |---|---|
