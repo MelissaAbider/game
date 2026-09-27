@@ -1,0 +1,1 @@
+"""EchoShift test suite"""

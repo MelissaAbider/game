@@ -1,0 +1,8 @@
+{
+  "name": "echoshift-lab",
+  "private": true,
+  "scripts": {
+    "dev:backend": "python -m uvicorn backend.app:app --reload --port 8000",
+    "test:backend": "python -m pytest backend/tests"
+  }
+}

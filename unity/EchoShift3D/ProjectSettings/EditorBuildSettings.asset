@@ -1,0 +1,12 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1045 &1
+EditorBuildSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Scenes:
+  - enabled: 1
+    path: Assets/EchoShift/Scenes/Main.unity
+    guid: 86b05d4566b07724bb4fc8f8e40804bf
+  m_configObjects: {}
+  m_UseUCBPForAssetBundles: 0

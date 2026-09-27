@@ -1,0 +1,18 @@
+.env
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+backend/.env
+# Unity client
+unity/**/[Ll]ibrary/
+unity/**/[Tt]emp/
+unity/**/[Oo]bj/
+unity/**/[Bb]uild/
+unity/**/[Bb]uilds/
+unity/**/[Ll]ogs/
+unity/**/[Uu]serSettings/
+unity/**/*.csproj
+unity/**/*.sln
