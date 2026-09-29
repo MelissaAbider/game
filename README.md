@@ -122,6 +122,9 @@ EchoShift Lab is built as an **AI engineering system**, not as a model-training 
 real-time voice input, LLM reasoning, structured outputs, validation, and game execution without letting the model take
 unsafe or impossible actions.
 
+For a detailed French technical explanation of the AI pipeline, STT, TTS, QuickIntent, Gemini intent parsing, and
+validation flow, see [docs/AI_TECHNICAL_OVERVIEW.fr.md](docs/AI_TECHNICAL_OVERVIEW.fr.md).
+
 ### Real-time voice-to-action pipeline
 
 The player speaks naturally. Unity streams audio to the backend, Gradium converts speech to text, and the transcript is
