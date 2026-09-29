@@ -1,204 +1,64 @@
-# EchoShift Lab - Documentation technique IA
+# EchoShift Lab - Resume technique IA
 
-Cette note sert de rappel technique pour expliquer le projet plus tard, notamment en entretien IA / ML Engineer.
+Cette fiche sert a reviser vite le projet avant un entretien.
 
-L'idee principale du projet est la suivante :
+## Idee principale
 
-> Le joueur parle naturellement. Le systeme transforme sa voix en texte, puis transforme ce texte en actions structurees que Unity peut valider et executer.
+Le joueur parle au robot. Le systeme transforme la voix en texte, puis transforme le texte en actions que Unity peut executer.
 
-L'IA ne controle jamais directement le jeu. Elle aide a comprendre l'intention du joueur.
+Phrase cle :
+
+> L'IA ne controle pas directement le jeu. Elle propose une action structuree, puis le backend et Unity verifient avant execution.
 
 ---
 
-## 1. Vue d'ensemble du pipeline
+## Pipeline complet
 
 ```text
-Voix du joueur
-  -> Unity capture le micro
-  -> backend /ws/stt
-  -> Gradium STT transforme audio -> texte
-  -> Unity recoit la phrase finale
-  -> QuickIntent si la commande est simple
-  -> sinon backend /api/interpret
-  -> Gemini transforme texte -> actions JSON
-  -> backend valide les actions
-  -> Unity verifie la faisabilite dans la scene
-  -> CommandExecutor execute le plan
-  -> ECHO repond
-  -> Gradium TTS transforme texte -> voix
+voix du joueur
+-> Gradium STT : audio -> texte
+-> QuickIntent si commande simple
+-> Gemini si commande complexe
+-> backend valide les actions
+-> Unity verifie la scene et execute
+-> Gradium TTS fait parler ECHO
 ```
-
-Le projet combine donc :
-
-- STT : speech-to-text, pour transcrire la voix.
-- LLM intent parsing : Gemini comprend les commandes complexes.
-- Structured output : Gemini doit retourner du JSON valide.
-- Guardrails : le backend et Unity filtrent les actions.
-- TTS : text-to-speech, pour faire parler ECHO.
-- Image generation : Gemini Image genere les assets visuels.
 
 ---
 
-## 2. Ou est l'IA dans le projet ?
+## Ou est l'IA ?
 
 | Partie | Technologie | Role |
 |---|---|---|
-| Voix vers texte | Gradium STT | Convertit l'audio du micro en phrase texte |
-| Texte vers intention | Gemini | Convertit une phrase complexe en actions structurees |
-| Voix de ECHO | Gradium TTS | Convertit une phrase texte en audio |
-| Images du jeu | Gemini Image | Genere les decors, robots, props et textures |
+| Voix vers texte | Gradium STT | Transforme le son du micro en phrase texte |
+| Phrase vers actions | Gemini | Comprend les commandes complexes |
+| Texte vers voix | Gradium TTS | Fait parler ECHO |
+| Images | Gemini Image | Genere les decors, robot, props et textures |
 
 Important :
 
-- `QuickIntent` n'est pas de l'IA. C'est un parser local en C# avec regex et liste de mots.
-- Les mesures de volume, cri, chuchotement et fredonnement ne sont pas de l'IA. Unity mesure directement le signal audio.
-- Unity reste l'autorite finale sur la physique et la logique du jeu.
+- `QuickIntent` n'est pas de l'IA. C'est un parser local en C# avec regex.
+- Le cri, le chuchotement et le fredonnement ne sont pas de l'IA. Unity mesure directement le volume et la hauteur de voix.
+- Gemini ne peut pas inventer n'importe quoi : il choisit dans une liste d'actions autorisees.
 
 ---
 
-## 3. STT : comment la voix devient du texte
+## Exemple 1 : commande simple
 
-STT signifie **Speech To Text**.
-
-Dans EchoShift Lab, le STT sert uniquement a convertir la voix du joueur en texte.
-
-Exemple :
-
-```text
-audio micro -> "run to the terminal and activate it"
-```
-
-### Etapes concretes
-
-1. Le joueur maintient `V`.
-2. Unity active le micro avec `VoiceInput`.
-3. Unity envoie des chunks audio PCM a `SttSession`.
-4. `SttSession` ouvre un WebSocket vers le backend :
-
-```text
-/ws/stt
-```
-
-5. Le backend cree une session `GradiumSTTSession`.
-6. Les chunks audio sont envoyes a Gradium :
-
-```python
-client.stt_realtime(
-    model_name="default",
-    input_format="pcm_24000",
-    json_config={"language": "en", "delay_in_frames": 10}
-)
-```
-
-7. Gradium renvoie du texte partiel pendant que le joueur parle.
-8. Quand le joueur relache `V`, Unity envoie `end`.
-9. Le backend envoie un flush a Gradium.
-10. Gradium renvoie la transcription finale.
-
-Fichiers importants :
-
-- `unity/EchoShift3D/Assets/EchoShift/Scripts/Voice/VoiceInput.cs`
-- `unity/EchoShift3D/Assets/EchoShift/Scripts/Voice/SttSession.cs`
-- `backend/routes/voice.py`
-- `backend/audio/gradium_stt.py`
-
-Le STT ne decide aucune action. Il produit seulement du texte.
-
----
-
-## 4. QuickIntent : commandes simples sans IA
-
-`QuickIntent` est un parser local dans Unity.
-
-Fichier :
-
-```text
-unity/EchoShift3D/Assets/EchoShift/Scripts/Gameplay/QuickIntent.cs
-```
-
-Il sert a eviter un appel a Gemini pour les commandes simples. Cela reduit la latence.
-
-### Ce que QuickIntent sait gerer
-
-Exemples :
-
-```text
-jump
-walk forward
-go quickly
-crouch
-turn around
-use
-```
-
-### Comment ca marche techniquement
-
-La methode principale est :
-
-```csharp
-public static bool TryParse(string text, out List<GameAction> actions)
-```
-
-Elle fait :
-
-1. Nettoyage du texte :
-
-```csharp
-var clean = Regex.Replace(text.ToLowerInvariant(), @"[^a-z0-9' ,;]", " ").Trim();
-```
-
-2. Rejet des commandes avec destination complexe :
-
-```text
-go to the terminal
-walk to the door
-```
-
-Ces commandes partent vers Gemini, car il faut identifier un objet de la scene.
-
-3. Verification que tous les mots sont connus dans une liste simple (`HashSet<string> Filler`).
-
-4. Mapping regex vers `GameAction`.
-
-Exemple :
-
-```csharp
-if (Has(c, "jump|hop|leap"))
-    return GameAction.Of("JUMP_OVER");
-```
-
-Donc :
-
-```text
-"jump over the laser"
-```
-
-devient en memoire C# :
-
-```csharp
-new GameAction
-{
-    Type = "JUMP_OVER",
-    Target = ""
-}
-```
-
-Ce n'est pas du JSON. C'est un objet C# cree directement dans Unity.
-
-### Exemple : "go quickly"
-
-La phrase :
+Le joueur dit :
 
 ```text
 go quickly
 ```
 
-est reconnue par QuickIntent :
+Ce qui se passe :
 
-- `go` signifie mouvement vers l'avant.
-- `quickly` signifie vitesse rapide.
-
-Resultat :
+```text
+1. Gradium STT transcrit : "go quickly"
+2. Unity donne la phrase a QuickIntent
+3. QuickIntent reconnait "go" + "quickly"
+4. Unity cree une action C#
+```
 
 ```csharp
 GameAction {
@@ -207,17 +67,29 @@ GameAction {
 }
 ```
 
-### Exemple : "go quickly to the terminal"
+Ici, Gemini n'est pas utilise. C'est plus rapide.
 
-Cette phrase contient une destination :
+---
+
+## Exemple 2 : commande complexe
+
+Le joueur dit :
 
 ```text
-to the terminal
+go quickly to the terminal and activate it
 ```
 
-QuickIntent refuse et retourne `false`.
+Ce qui se passe :
 
-La phrase part alors vers Gemini, qui peut produire :
+```text
+1. Gradium STT transcrit la phrase
+2. QuickIntent refuse car il y a une cible : "to the terminal"
+3. Unity envoie la phrase + l'etat du monde au backend
+4. Gemini analyse la phrase
+5. Gemini renvoie des actions JSON
+```
+
+Exemple de reponse Gemini :
 
 ```json
 {
@@ -226,121 +98,6 @@ La phrase part alors vers Gemini, qui peut produire :
       "type": "MOVE_TO",
       "target": "core_terminal",
       "speed": "run"
-    }
-  ]
-}
-```
-
----
-
-## 5. Gemini : comprendre les commandes complexes
-
-Gemini sert quand une commande demande de comprendre :
-
-- une cible precise ;
-- une sequence de plusieurs actions ;
-- une paraphrase ;
-- une intention implicite ;
-- une construction avec materiau.
-
-Exemples :
-
-```text
-go to the terminal and activate it
-walk to the blue screen and press it
-build a bridge of ice over the gap
-make something icy so I can cross
-```
-
-### Ce que Unity envoie au backend
-
-Unity envoie :
-
-- la phrase du joueur ;
-- l'etat du monde ;
-- les objets visibles ;
-- les hazards actifs ;
-- les objets interactifs.
-
-Exemple simplifie :
-
-```json
-{
-  "transcript": "go to the terminal and activate it",
-  "world_state": {
-    "roomName": "Core",
-    "visibleObjects": [
-      {
-        "id": "core_terminal",
-        "type": "terminal",
-        "label": "terminal"
-      }
-    ],
-    "allowedActions": ["MOVE_TO", "INTERACT", "JUMP_OVER", "CROUCH", "STOP"]
-  }
-}
-```
-
-Fichiers Unity :
-
-- `GameDirector.cs` construit `WorldStateJson()`.
-- `GameAction.cs` contient `IntentClient.Interpret(...)`.
-
-### Ce que le backend envoie a Gemini
-
-Dans `backend/ai/intent_parser.py`, le backend construit un prompt avec :
-
-```python
-prompt = {
-    "player_transcript": transcript,
-    "world_state": world_state,
-    "allowed_actions": world_state.get("allowedActions", []),
-    "response_rules": {
-        "confidence_threshold": 0.7,
-        "max_actions": 8,
-        "no_autopilot": "Do not solve the whole room from a vague request.",
-    },
-}
-```
-
-Puis il appelle Gemini avec :
-
-```python
-response = await self.client.aio.models.generate_content(
-    model=self.settings.gemini_model,
-    contents=json.dumps(prompt),
-    config=types.GenerateContentConfig(
-        system_instruction=INTENT_INTERPRETER_SYSTEM_INSTRUCTION,
-        response_mime_type="application/json",
-        response_schema=IntentResponse,
-        temperature=0.15,
-    ),
-)
-```
-
-Points importants :
-
-- `response_mime_type="application/json"` force une reponse JSON.
-- `response_schema=IntentResponse` force le schema attendu.
-- `temperature=0.15` reduit la creativite pour avoir des reponses plus stables.
-
-### Exemple complet
-
-Phrase :
-
-```text
-go to the terminal and activate it
-```
-
-Gemini peut repondre :
-
-```json
-{
-  "actions": [
-    {
-      "type": "MOVE_TO",
-      "target": "core_terminal",
-      "speed": "walk"
     },
     {
       "type": "INTERACT",
@@ -348,209 +105,95 @@ Gemini peut repondre :
     }
   ],
   "confidence": 0.92,
-  "interpretation": "The player wants to go to the terminal and use it.",
-  "requires_clarification": false,
   "echo": "Command accepted."
 }
 ```
 
-Gemini ne bouge pas le robot. Il traduit une phrase naturelle en actions structurees.
+Ensuite :
+
+```text
+6. Le backend verifie que MOVE_TO et INTERACT sont autorises
+7. Le backend verifie que core_terminal existe
+8. Unity verifie que le robot peut vraiment aller au terminal
+9. Unity execute : courir vers le terminal puis interagir
+10. ECHO parle avec Gradium TTS
+```
 
 ---
 
-## 6. Liste des actions predefinies
+## A quoi sert Gemini ?
 
-Gemini doit choisir dans une liste d'actions que le jeu sait executer.
-
-Fichiers :
-
-- `backend/ai/schemas.py`
-- `backend/game/action_schema.py`
-- `unity/EchoShift3D/Assets/EchoShift/Scripts/Gameplay/GameAction.cs`
-
-Actions principales :
+Gemini sert a faire ce mapping :
 
 ```text
-MOVE_LEFT
-MOVE_RIGHT
-MOVE_FORWARD
-MOVE_BACK
-TURN_LEFT
-TURN_RIGHT
-TURN_AROUND
+phrase humaine variee -> actions connues du jeu
+```
+
+Exemples :
+
+```text
+"go to the terminal"
+"walk to the blue screen"
+"press the console"
+"activate that glowing thing"
+```
+
+peuvent devenir :
+
+```json
+{"type": "MOVE_TO", "target": "core_terminal"}
+{"type": "INTERACT", "target": "core_terminal"}
+```
+
+La liste d'actions sert de cadre. Gemini choisit dedans.
+
+Actions possibles :
+
+```text
 MOVE_TO
-JUMP
+MOVE_FORWARD
 JUMP_OVER
 CROUCH
-STAND
-WAIT
-STOP
 INTERACT
-USE
-FOLLOW
-AVOID
 BUILD
+STOP
 ECHO
 RECYCLE
 ```
 
-Pourquoi une liste predefinie ?
-
-Parce que le modele ne doit pas inventer des actions impossibles comme :
-
-```text
-FLY
-TELEPORT
-SLEEP
-BECOME_INVISIBLE
-```
-
-La liste est le contrat entre l'IA et le jeu.
-
-Gemini sert a choisir les bonnes actions dans cette liste, pas a inventer de nouvelles capacites.
-
 ---
 
-## 7. Validation backend
+## Validation
 
-La validation backend filtre la sortie de Gemini avant de l'envoyer a Unity.
+Il y a deux validations.
 
-Fichier :
+### 1. Validation backend
 
-```text
-backend/game/validators.py
-```
+Le backend verifie :
 
-La fonction principale est :
-
-```python
-validate_intent(intent, world_state)
-```
-
-Elle verifie :
-
-- l'action est dans `ALLOWED_ACTIONS` ;
-- les actions avec cible pointent vers un objet visible ;
-- les cibles inventees sont rejetees ;
-- si toutes les actions sont invalides, le backend demande une clarification.
+- l'action existe dans la liste autorisee ;
+- la cible existe dans les objets visibles ;
+- Gemini n'a pas invente un objet ;
+- la confidence est suffisante.
 
 Exemple :
 
-Gemini repond :
-
 ```json
-{
-  "actions": [
-    {
-      "type": "MOVE_TO",
-      "target": "dragon"
-    }
-  ]
-}
+{"type": "MOVE_TO", "target": "dragon"}
 ```
 
-Mais `dragon` n'existe pas dans `visibleObjects`.
+Si `dragon` n'existe pas, l'action est rejetee.
 
-Le backend transforme la reponse en :
+### 2. Validation Unity
 
-```json
-{
-  "actions": [],
-  "confidence": 0.25,
-  "requires_clarification": true,
-  "clarification": "Which object?",
-  "echo": "Which object?"
-}
-```
+Unity verifie la realite de la scene :
 
-Cette validation evite qu'une hallucination de Gemini atteigne Unity.
+- le robot peut-il avancer ?
+- y a-t-il un obstacle ?
+- faut-il sauter ou s'accroupir ?
+- l'objet est-il utilisable ?
 
----
-
-## 8. Validation Unity
-
-Apres la validation backend, Unity refait une validation physique et gameplay.
-
-Fichier principal :
-
-```text
-unity/EchoShift3D/Assets/EchoShift/Scripts/Gameplay/CommandExecutor.cs
-```
-
-La methode importante est :
-
-```csharp
-Plan Create(GameAction a)
-```
-
-Elle recoit une action et decide quel plan d'execution creer.
-
-### Exemple : MOVE_TO
-
-```csharp
-case "MOVE_TO":
-case "FOLLOW":
-{
-    var e = WorldEntity.Find(a.Target);
-    if (!e) return Fail("I can't see that from here.");
-    return new MovePlan(this, e.Position, speed, e.ApproachDistance);
-}
-```
-
-Unity verifie :
-
-- la cible existe dans la scene ;
-- l'objet a une position ;
-- le robot peut marcher vers lui.
-
-### Exemple : JUMP_OVER
-
-```csharp
-case "JUMP":
-case "JUMP_OVER":
-{
-    var barrier = FindBarrier(a.Target) ?? NearestBarrierAhead(3.5f);
-    if (barrier == null)
-    {
-        subject.Jump();
-        return new WaitPlan(0.8f);
-    }
-    if (barrier.Kind == BarrierKind.Crouch)
-        return director.WrongMove(barrier, false)
-            ? new InstantPlan(PlanResult.Failed)
-            : Fail("Too high to jump. Say \"crouch under the beam\".");
-    if (barrier.Kind != BarrierKind.Jump) return Fail(barrier.Hint);
-    return new JumpOverPlan(this, barrier);
-}
-```
-
-Unity verifie :
-
-- y a-t-il une barriere devant le joueur ?
-- cette barriere est-elle sautable ?
-- si c'est une barriere haute, sauter est une mauvaise action ;
-- si c'est une barriere basse, sauter est autorise.
-
-### Exemple : CROUCH
-
-```csharp
-case "CROUCH":
-{
-    var barrier = FindBarrier(a.Target) ?? NearestBarrierAhead(3.5f);
-    if (barrier != null && barrier.Kind == BarrierKind.Crouch)
-        return new CrouchUnderPlan(this, barrier);
-    if (barrier != null && barrier.Kind == BarrierKind.Jump && director.WrongMove(barrier, true))
-        return new InstantPlan(PlanResult.Failed);
-    return new CrouchPlan(subject, a.DurationMs > 0 ? a.DurationMs / 1000f : 1.4f);
-}
-```
-
-Unity verifie :
-
-- si l'obstacle est haut, `CROUCH` est correct ;
-- si l'obstacle est au sol, `CROUCH` est incorrect : il fallait sauter.
-
-### Exemple concret : mauvaise action
+Exemple :
 
 Le joueur dit :
 
@@ -558,25 +201,19 @@ Le joueur dit :
 crouch under the beam
 ```
 
-Mais il est devant un laser au sol.
+Mais l'obstacle est un laser au sol.
 
-Pipeline :
+Unity comprend :
 
 ```text
-STT -> "crouch under the beam"
-QuickIntent -> GameAction { Type = "CROUCH" }
-CommandExecutor -> cherche la barriere devant
-barrier.Kind == Jump
-WrongMove(..., triedCrouch: true)
-action echoue
-robot reagit avec animation confuse
+CROUCH est mauvais ici, il fallait JUMP_OVER.
 ```
 
-La validation Unity est donc la derniere protection : elle verifie la realite de la scene.
+Donc le robot refuse et reagit.
 
 ---
 
-## 9. Que se passe-t-il avec une action inconnue ?
+## Si le joueur dit une action inconnue
 
 Exemple :
 
@@ -584,175 +221,50 @@ Exemple :
 sleep
 ```
 
-Pipeline :
-
-1. STT transcrit :
+Ce qui se passe :
 
 ```text
-sleep
-```
-
-2. QuickIntent essaie de parser.
-
-`sleep` n'est pas dans sa liste de mots simples, donc QuickIntent retourne `false`.
-
-3. La phrase part vers Gemini.
-
-Gemini doit choisir dans les actions autorisees. Il n'y a pas `SLEEP`.
-
-Il devrait repondre :
-
-```json
-{
-  "actions": [],
-  "confidence": 0.2,
-  "requires_clarification": true,
-  "clarification": "I can't do that."
-}
-```
-
-4. Unity refuse d'executer :
-
-```csharp
-if (intent.Actions.Count == 0 || intent.NeedsClarification || intent.Confidence < 0.7f)
-```
-
-Resultat :
-
-```text
-Le robot ne fait rien.
-ECHO demande une clarification ou dit qu'il n'a pas compris.
+1. STT transcrit "sleep"
+2. QuickIntent ne reconnait pas
+3. Gemini essaie de choisir une action autorisee
+4. Il n'y a pas d'action SLEEP
+5. Le systeme refuse
+6. Le robot ne fait rien
 ```
 
 ---
 
-## 10. TTS : comment ECHO parle
+## TTS : comment ECHO parle
 
 TTS signifie **Text To Speech**.
 
-Le TTS transforme une phrase texte en voix audio.
+Le TTS ne choisit pas la phrase. Il transforme une phrase deja choisie en audio.
 
-Dans le projet, le TTS utilise **Gradium TTS**.
-
-Fichiers :
-
-- `backend/audio/gradium_tts.py`
-- `backend/routes/voice.py`
-- `unity/EchoShift3D/Assets/EchoShift/Scripts/Voice/EchoSpeaker.cs`
-
-Backend :
-
-```python
-client.tts_realtime(
-    voice_id=settings.gradium_voice_id,
-    output_format="wav",
-    model_name="default",
-)
-```
-
-Important :
-
-> Le TTS ne choisit pas la phrase. Il transforme une phrase deja choisie en audio.
-
-La phrase peut venir :
-
-- du code Unity ;
-- du backend ;
-- du champ `echo` renvoye par Gemini ;
-- d'une clarification ;
-- d'un message d'erreur gameplay.
-
-Exemples :
+Exemples de phrases :
 
 ```text
 Command accepted.
 Which object?
 I can't see that from here.
 Hold V and SHOUT at the glass!
-Too high to jump. Say "crouch under the beam".
 ```
 
 Pipeline :
 
 ```text
 texte ECHO
-  -> backend /ws/tts
-  -> Gradium TTS
-  -> audio wav
-  -> Unity joue l'audio
+-> Gradium TTS
+-> audio
+-> Unity joue la voix
 ```
 
 ---
 
-## 11. Generation d'images avec Gemini Image
+## Phrase a dire en entretien
 
-Gemini Image sert a generer les assets visuels :
+> J'ai cree un jeu Unity controle par la voix. Gradium STT transforme la voix du joueur en texte. Pour les commandes simples, Unity utilise un parser local appele QuickIntent afin d'eviter la latence. Pour les commandes complexes, Gemini transforme la phrase en actions JSON structurees, comme MOVE_TO ou INTERACT. Le backend valide ces actions, puis Unity verifie qu'elles sont possibles dans la scene avant de les executer. J'utilise aussi Gradium TTS pour faire parler ECHO et Gemini Image pour generer les assets visuels.
 
-- fonds des salles ;
-- poses du robot ;
-- lasers ;
-- terminal ;
-- porte ;
-- portail ;
-- textures ;
-- images du README.
+Version courte :
 
-Fichier :
-
-```text
-backend/ai/design_assets.py
-```
-
-Exemple de logique :
-
-```text
-prompt texte -> Gemini Image -> image PNG -> cache backend/assets -> copie Unity Resources
-```
-
-Les images sont mises en cache pour eviter de regenarer a chaque lancement.
-
-Cette partie montre une utilisation multimodale :
-
-```text
-texte -> image
-```
-
----
-
-## 12. Resume pour entretien IA / ML Engineer
-
-Phrase courte :
-
-> J'ai construit un pipeline d'interaction vocale pour un jeu Unity. Le joueur parle, Gradium STT transcrit la voix, Gemini interprete les commandes complexes en actions JSON structurees, le backend valide ces actions, puis Unity verifie leur faisabilite physique avant execution. J'utilise aussi Gradium TTS pour la voix de l'assistant et Gemini Image pour generer les assets visuels.
-
-Phrase plus technique :
-
-> Le systeme separe la comprehension du langage et l'autorite gameplay. Le LLM n'execute rien directement : il produit une intention structuree dans un schema ferme. Le backend filtre les hallucinations et Unity garde la decision finale sur les collisions, obstacles et interactions. Les commandes simples passent par QuickIntent, un parser local rule-based, pour reduire la latence.
-
-Points a valoriser :
-
-- integration STT temps reel ;
-- orchestration backend de services IA ;
-- LLM intent parsing ;
-- structured output avec schema Pydantic ;
-- validation et guardrails ;
-- fallback rule-based ;
-- reduction de latence avec parsing local ;
-- separation client / backend pour proteger les cles API ;
-- generation d'images avec prompts et cache ;
-- Unity garde l'autorite finale.
-
----
-
-## 13. Resume ultra simple
-
-```text
-STT = voix -> texte
-Gemini = texte -> actions structurees
-Backend = verifie que l'action est logique
-Unity = verifie que l'action est possible dans la scene
-TTS = texte -> voix
-Gemini Image = texte -> images du jeu
-QuickIntent = parser local, pas IA
-```
+> L'IA sert a comprendre la voix naturelle du joueur et a la convertir en actions structurees, mais le jeu garde toujours le controle final.
 
